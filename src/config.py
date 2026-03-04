@@ -5,7 +5,7 @@ Tetris PVP 游戏配置文件
 
 # 窗口设置
 WINDOW_WIDTH = 900
-WINDOW_HEIGHT = 700
+WINDOW_HEIGHT = 800  # 增大高度以容纳玩家信息
 WINDOW_TITLE = "Tetris PVP - 对战俄罗斯方块"
 FPS = 60
 
@@ -49,12 +49,35 @@ FALL_SPEED_MIN = 100         # 最快下落速度
 SOFT_DROP_SPEED = 50         # 软降速度
 LOCK_DELAY = 500             # 方块落地后锁定延迟
 
-# 攻击机制设置
+# 难度设置
+DIFFICULTY_SETTINGS = {
+    'easy': {
+        'fall_speed': 1200,
+        'speed_decrease': 30,
+        'name': 'Easy',
+    },
+    'normal': {
+        'fall_speed': 1000,
+        'speed_decrease': 50,
+        'name': 'Normal',
+    },
+    'hard': {
+        'fall_speed': 800,
+        'speed_decrease': 70,
+        'name': 'Hard',
+    },
+}
+
+# 默认难度
+DEFAULT_DIFFICULTY = 'normal'
+
+# 攻击机制设置（道具模式）
+# 消行获得道具（垃圾行数量），玩家主动使用
 ATTACK_FORMULA = {
-    1: 0,   # 消1行 - 无攻击
-    2: 1,   # 消2行 - 1行垃圾
-    3: 2,   # 消3行 - 2行垃圾
-    4: 4,   # 消4行(Tetris) - 4行垃圾
+    1: 0,   # 消1行 - 无道具
+    2: 0,   # 消2行 - 无道具
+    3: 1,   # 消3行 - 获得1行垃圾道具
+    4: 2,   # 消4行(Tetris) - 获得2行垃圾道具
 }
 GARBAGE_WARNING_TIME = 500   # 垃圾行出现前的警告时间（毫秒）
 
@@ -66,9 +89,10 @@ PLAYER1_CONTROLS = {
     'left': pygame.K_a,       # A - 左移
     'right': pygame.K_d,      # D - 右移
     'soft_drop': pygame.K_s,  # S - 软降
-    'hard_drop': pygame.K_w,  # W - 硬降
-    'rotate_cw': pygame.K_e,  # E - 顺时针旋转
-    'rotate_ccw': pygame.K_q, # Q - 逆时针旋转
+    'hard_drop': pygame.K_SPACE,  # 空格 - 硬降
+    'rotate_cw': pygame.K_w,  # W - 顺时针旋转
+    'rotate_ccw': pygame.K_w, # W - 顺时针旋转（统一使用W）
+    'use_item': pygame.K_e,   # E - 使用道具
     'hold': pygame.K_r,       # R - 暂存（预留）
 }
 
@@ -76,10 +100,11 @@ PLAYER1_CONTROLS = {
 PLAYER2_CONTROLS = {
     'left': pygame.K_LEFT,     # 左箭头
     'right': pygame.K_RIGHT,   # 右箭头
-    'soft_drop': pygame.K_DOWN, # 下箭头
-    'hard_drop': pygame.K_UP,   # 上箭头
-    'rotate_cw': pygame.K_PERIOD,  # . - 顺时针旋转
-    'rotate_ccw': pygame.K_COMMA,  # , - 逆时针旋转
+    'soft_drop': pygame.K_DOWN, # 下箭头 - 软降
+    'hard_drop': pygame.K_RCTRL, # 右Ctrl - 硬降
+    'rotate_cw': pygame.K_UP,   # 上箭头 - 顺时针旋转
+    'rotate_ccw': pygame.K_UP,  # 上箭头 - 顺时针旋转（统一使用上箭头）
+    'use_item': pygame.K_PERIOD,  # . - 使用道具
     'hold': pygame.K_SLASH,        # / - 暂存（预留）
 }
 

@@ -1,71 +1,83 @@
 """
 俄罗斯方块主程序
-单机版游戏循环
+支持单机和双人对战模式，带完整菜单系统
 """
 
 import pygame
 import sys
+from typing import Optional
 
 from src.config import (
     BOARD_WIDTH, BOARD_HEIGHT,
-    PLAYER1_BOARD_X, BOARD_MARGIN_Y,
-    FALL_SPEED_INITIAL, SOFT_DROP_SPEED, LOCK_DELAY,
-    PLAYER1_CONTROLS, SCORE_PER_LINE
+    PLAYER1_BOARD_X, PLAYER2_BOARD_X, BOARD_MARGIN_Y,
+    PLAYER1_CONTROLS, PLAYER2_CONTROLS,
+    DEFAULT_DIFFICULTY,
 )
+from src.models.player import Player
 from src.models.board import Board
-from src.models.tetromino import Tetromino, TetrominoBag
+from src.models.tetromino import Tetromino, TetrominoBag, SharedPieceSequence
+from src.systems.input_handler import InputHandler
 from src.views.renderer import Renderer
+from src.views.ui import UI
+
+
+class GameState:
+    """游戏状态枚举"""
+    MENU = 'menu'
+    COUNTDOWN = 'countdown'
+    PLAYING = 'playing'
+    PAUSED = 'paused'
+    GAME_OVER = 'game_over'
 
 
 class Game:
-    """游戏主类"""
+    """游戏主类 - 支持双人对战"""
 
     def __init__(self):
         """初始化游戏"""
         self.renderer = Renderer()
-        self.board = Board()
-        self.bag = TetrominoBag()
+        self.ui = UI(self.renderer.screen)
 
-        # 当前和下一个方块
-        self.current_piece: Tetromino = None
-        self.next_piece: Tetromino = None
-        self.spawn_piece()
+        # 游戏模式
+        self.pvp_mode = True
+        self.difficulty = DEFAULT_DIFFICULTY
+
+        # 玩家
+        self.player1: Optional[Player] = None
+        self.player2: Optional[Player] = None
+        self.input_handler: Optional[InputHandler] = None
 
         # 游戏状态
-        self.score = 0
-        self.lines = 0
-        self.level = 1
-        self.game_over = False
-        self.paused = False
+        self.state = GameState.MENU
+        self.winner: Optional[int] = None
 
-        # 计时器
-        self.last_fall_time = 0
-        self.fall_speed = FALL_SPEED_INITIAL
-        self.lock_timer = 0
-        self.is_locking = False
+        # 初始化玩家
+        self._init_players()
 
-        # 输入状态（用于处理按住按键）
-        self.keys_pressed = set()
+    def _init_players(self) -> None:
+        """初始化玩家"""
+        if self.pvp_mode:
+            # PVP 模式：共享方块序列，确保公平
+            self._shared_sequence = SharedPieceSequence()
+            self.player1 = Player(1, PLAYER1_CONTROLS, self.difficulty,
+                                  shared_sequence=self._shared_sequence)
+            self.player2 = Player(2, PLAYER2_CONTROLS, self.difficulty,
+                                  shared_sequence=self._shared_sequence)
+            self.input_handler = InputHandler(self.player1, self.player2)
+            # 生成初始方块
+            self.player1.spawn_piece()
+            self.player2.spawn_piece()
+        else:
+            # 单人模式：独立方块序列
+            self._shared_sequence = None
+            self.player1 = Player(1, PLAYER1_CONTROLS, self.difficulty)
+            self.player1.spawn_piece()
+            self.player2 = None
+            self.input_handler = None
 
-    def spawn_piece(self) -> None:
-        """生成新方块"""
-        if self.next_piece is None:
-            self.next_piece = Tetromino(self.bag.next())
-
-        self.current_piece = self.next_piece
-        self.next_piece = Tetromino(self.bag.next())
-
-        # 设置初始位置（棋盘顶部中央）
-        self.current_piece.row = 0
-        self.current_piece.col = BOARD_WIDTH // 2 - 1
-
-        # 检查游戏结束
-        if self.board.is_game_over(self.current_piece):
-            self.game_over = True
-
-    def handle_input(self) -> bool:
+    def handle_events(self) -> bool:
         """
-        处理输入
+        处理事件
 
         Returns:
             True 如果游戏继续，False 如果退出
@@ -75,89 +87,109 @@ class Game:
                 return False
 
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                if not self._handle_key_down(event.key):
                     return False
 
-                if self.game_over:
-                    if event.key == pygame.K_r:
-                        self.restart()
-                    continue
-
-                if event.key == pygame.K_p:
-                    self.paused = not self.paused
-
-                if not self.paused:
-                    self.keys_pressed.add(event.key)
-                    self.handle_key_press(event.key)
-
-            if event.type == pygame.KEYUP:
-                self.keys_pressed.discard(event.key)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                self._handle_mouse_click(event.pos)
 
         return True
 
-    def handle_key_press(self, key: int) -> None:
-        """处理按键按下"""
-        if key == PLAYER1_CONTROLS['left']:
-            self.move_piece(0, -1)
-        elif key == PLAYER1_CONTROLS['right']:
-            self.move_piece(0, 1)
-        elif key == PLAYER1_CONTROLS['soft_drop']:
-            pass  # 在 update 中处理软降
-        elif key == PLAYER1_CONTROLS['hard_drop']:
-            self.hard_drop()
-        elif key == PLAYER1_CONTROLS['rotate_cw']:
-            self.rotate_piece(1)
-        elif key == PLAYER1_CONTROLS['rotate_ccw']:
-            self.rotate_piece(-1)
-
-    def move_piece(self, dr: int, dc: int) -> bool:
+    def _handle_key_down(self, key: int) -> bool:
         """
-        移动方块
+        处理按键按下
 
         Args:
-            dr: 行方向移动量
-            dc: 列方向移动量
+            key: 按键代码
 
         Returns:
-            True 如果移动成功
+            True 如果游戏继续
         """
-        self.current_piece.move(dr, dc)
-        if self.board.is_valid_position(self.current_piece):
-            # 移动成功，重置锁定计时器
-            if self.is_locking:
-                self.lock_timer = 0
-            return True
+        # ESC 键处理
+        if key == pygame.K_ESCAPE:
+            if self.state == GameState.MENU:
+                return False
+            elif self.state in (GameState.PLAYING, GameState.PAUSED, GameState.GAME_OVER):
+                self.state = GameState.MENU
+                self._init_players()
+                return True
+
+        # R 键重新开始
+        if key == pygame.K_r:
+            if self.state == GameState.GAME_OVER:
+                self.restart()
+                return True
+
+        # P 键暂停
+        if key == pygame.K_p:
+            if self.state == GameState.PLAYING:
+                self.state = GameState.PAUSED
+            elif self.state == GameState.PAUSED:
+                self.state = GameState.PLAYING
+
+        # 菜单状态下的按键
+        if self.state == GameState.MENU:
+            if key == pygame.K_1:
+                self._start_game(pvp=True)
+            elif key == pygame.K_2:
+                self._start_game(pvp=False)
+            elif key == pygame.K_3:
+                return False
+
+        # 游戏中的按键处理
+        if self.state == GameState.PLAYING:
+            if self.pvp_mode and self.input_handler:
+                # 检查道具使用键
+                if key == self.player1.controls.get('use_item'):
+                    self._use_item(self.player1, self.player2)
+                elif key == self.player2.controls.get('use_item'):
+                    self._use_item(self.player2, self.player1)
+                # 普通按键分发
+                elif key in self.input_handler._key_to_player:
+                    player = self.input_handler._key_to_player[key]
+                    player.handle_key_press(key)
+            elif not self.pvp_mode:
+                self.player1.handle_key_press(key)
+
+        return True
+
+    def _handle_mouse_click(self, pos: tuple) -> None:
+        """处理鼠标点击"""
+        if self.state == GameState.MENU:
+            action = self.ui.check_menu_click(pos)
+            if action == "PVP Mode":
+                self._start_game(pvp=True)
+            elif action == "Single Player":
+                self._start_game(pvp=False)
+            elif action == "Quit":
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+
+    def _start_game(self, pvp: bool) -> None:
+        """开始游戏"""
+        self.pvp_mode = pvp
+        self._init_players()
+        self.state = GameState.COUNTDOWN
+        self.ui.start_countdown()
+
+    def restart(self) -> None:
+        """重新开始游戏"""
+        if self.pvp_mode:
+            # PVP 模式：创建新的共享序列
+            self._shared_sequence = SharedPieceSequence()
+            self.player1.reset(reset_sequence=False)
+            self.player1._shared_sequence = self._shared_sequence
+            self.player2.reset(reset_sequence=False)
+            self.player2._shared_sequence = self._shared_sequence
+            # 生成初始方块
+            self.player1.spawn_piece()
+            self.player2.spawn_piece()
         else:
-            # 移动失败，撤销
-            self.current_piece.move(-dr, -dc)
-            return False
+            self.player1.reset(reset_sequence=True)
+            self.player1.spawn_piece()
 
-    def rotate_piece(self, direction: int) -> bool:
-        """
-        旋转方块
-
-        Args:
-            direction: 1 为顺时针，-1 为逆时针
-
-        Returns:
-            True 如果旋转成功
-        """
-        if self.board.can_rotate(self.current_piece, direction):
-            if direction == 1:
-                self.current_piece.rotate_cw()
-            else:
-                self.current_piece.rotate_ccw()
-            # 旋转成功，重置锁定计时器
-            if self.is_locking:
-                self.lock_timer = 0
-            return True
-        return False
-
-    def hard_drop(self) -> None:
-        """硬降 - 直接落到底部"""
-        while self.move_piece(1, 0):
-            self.score += 2  # 硬降每格加2分
-        self.lock_piece()
+        self.winner = None
+        self.state = GameState.COUNTDOWN
+        self.ui.start_countdown()
 
     def update(self, dt: int) -> None:
         """
@@ -166,165 +198,103 @@ class Game:
         Args:
             dt: 距离上一帧的时间（毫秒）
         """
-        if self.game_over or self.paused:
-            return
+        if self.state == GameState.COUNTDOWN:
+            result = self.ui.update_countdown()
+            if result == 0:
+                self.state = GameState.PLAYING
 
-        current_time = pygame.time.get_ticks()
+        elif self.state == GameState.PLAYING:
+            current_time = pygame.time.get_ticks()
 
-        # 处理软降（按住下键）
-        if PLAYER1_CONTROLS['soft_drop'] in self.keys_pressed:
-            fall_speed = SOFT_DROP_SPEED
-        else:
-            fall_speed = self.fall_speed
+            # 更新玩家
+            self.player1.update(dt, current_time)
+            if self.pvp_mode and self.player2:
+                self.player2.update(dt, current_time)
 
-        # 检查是否需要下落
-        if current_time - self.last_fall_time >= fall_speed:
-            self.last_fall_time = current_time
+            # 检查游戏结束
+            self._check_game_over()
 
-            # 尝试下落
-            if self.move_piece(1, 0):
-                # 下落成功
-                if PLAYER1_CONTROLS['soft_drop'] in self.keys_pressed:
-                    self.score += 1  # 软降每格加1分
-                self.is_locking = False
-            else:
-                # 无法下落，开始或继续锁定计时
-                if not self.is_locking:
-                    self.is_locking = True
-                    self.lock_timer = 0
+    def _handle_held_keys(self) -> None:
+        """处理持续按住的键"""
+        pass  # 按键状态已在 Player 中维护
+
+    def _use_item(self, attacker: Player, target: Player) -> None:
+        """
+        使用道具攻击对手
+
+        Args:
+            attacker: 使用道具的玩家
+            target: 被攻击的玩家
+        """
+        garbage_count = attacker.use_item()
+        if garbage_count > 0:
+            target.receive_garbage(garbage_count)
+
+    def _check_game_over(self) -> None:
+        """检查游戏结束"""
+        if self.pvp_mode and self.player2:
+            p1_dead = self.player1.game_over
+            p2_dead = self.player2.game_over
+
+            if p1_dead and p2_dead:
+                # 同时死亡，比较分数
+                self.state = GameState.GAME_OVER
+                if self.player1.score > self.player2.score:
+                    self.winner = 1
+                elif self.player2.score > self.player1.score:
+                    self.winner = 2
                 else:
-                    self.lock_timer += fall_speed
-
-        # 检查锁定
-        if self.is_locking and self.lock_timer >= LOCK_DELAY:
-            self.lock_piece()
-
-    def lock_piece(self) -> None:
-        """锁定当前方块"""
-        self.board.place_tetromino(self.current_piece)
-
-        # 消行
-        lines_cleared = self.board.clear_lines()
-        if lines_cleared > 0:
-            self.lines += lines_cleared
-            self.score += SCORE_PER_LINE.get(lines_cleared, 0) * self.level
-
-            # 升级（每10行升一级）
-            self.level = self.lines // 10 + 1
-            # 加快下落速度
-            self.fall_speed = max(
-                FALL_SPEED_INITIAL - (self.level - 1) * 50,
-                100
-            )
-
-        # 生成新方块
-        self.spawn_piece()
-        self.is_locking = False
-        self.lock_timer = 0
-
-    def restart(self) -> None:
-        """重新开始游戏"""
-        self.board.reset()
-        self.bag = TetrominoBag()
-        self.score = 0
-        self.lines = 0
-        self.level = 1
-        self.game_over = False
-        self.paused = False
-        self.fall_speed = FALL_SPEED_INITIAL
-        self.current_piece = None
-        self.next_piece = None
-        self.spawn_piece()
+                    self.winner = None  # 平局
+            elif p1_dead:
+                self.state = GameState.GAME_OVER
+                self.winner = 2
+            elif p2_dead:
+                self.state = GameState.GAME_OVER
+                self.winner = 1
+        else:
+            # 单人模式
+            if self.player1.game_over:
+                self.state = GameState.GAME_OVER
 
     def render(self) -> None:
         """渲染游戏画面"""
-        self.renderer.clear()
+        if self.state == GameState.MENU:
+            mouse_pos = pygame.mouse.get_pos()
+            self.ui.draw_main_menu(mouse_pos)
 
-        # 绘制棋盘
-        self.renderer.draw_board(
-            PLAYER1_BOARD_X, BOARD_MARGIN_Y,
-            self.board.grid
-        )
-        self.renderer.draw_border(PLAYER1_BOARD_X, BOARD_MARGIN_Y)
+        elif self.state == GameState.COUNTDOWN:
+            self._render_game()
+            self.ui.draw_countdown()
 
-        # 绘制当前方块
-        if self.current_piece and not self.game_over:
-            # 绘制幽灵方块
-            ghost_row = self.board.get_ghost_position(self.current_piece)
-            ghost = self.current_piece.copy()
-            ghost.row = ghost_row
-            self.renderer.draw_tetromino(
-                PLAYER1_BOARD_X, BOARD_MARGIN_Y,
-                ghost, is_ghost=True
-            )
-            # 绘制当前方块
-            self.renderer.draw_tetromino(
-                PLAYER1_BOARD_X, BOARD_MARGIN_Y,
-                self.current_piece
-            )
+        elif self.state == GameState.PLAYING:
+            self._render_game()
 
-        # 绘制玩家信息
-        self.renderer.draw_player_info(
-            1, PLAYER1_BOARD_X,
-            self.score, self.lines
-        )
+        elif self.state == GameState.PAUSED:
+            self._render_game()
+            self.ui.draw_pause_screen()
 
-        # 绘制等级
-        self.renderer.draw_text(
-            f"Level: {self.level}",
-            PLAYER1_BOARD_X,
-            BOARD_MARGIN_Y + BOARD_HEIGHT * 30 + 70
-        )
-
-        # 绘制下一个方块预览
-        if self.next_piece:
-            self.renderer.draw_text(
-                "Next:",
-                PLAYER1_BOARD_X + 200,
-                BOARD_MARGIN_Y
-            )
-            # 简单预览：在右侧显示下一个方块
-            preview_x = PLAYER1_BOARD_X + 200
-            preview_y = BOARD_MARGIN_Y + 30
-            for row, col in self.next_piece.cells:
-                x = preview_x + col * 20
-                y = preview_y + row * 20
-                rect = pygame.Rect(x, y, 18, 18)
-                pygame.draw.rect(self.renderer.screen, self.next_piece.color, rect)
-
-        # 游戏结束画面
-        if self.game_over:
-            self.renderer.draw_text(
-                "GAME OVER",
-                PLAYER1_BOARD_X + 150,
-                BOARD_MARGIN_Y + 250,
-                'large',
-                center=True
-            )
-            self.renderer.draw_text(
-                "Press R to Restart",
-                PLAYER1_BOARD_X + 150,
-                BOARD_MARGIN_Y + 300,
-                center=True
-            )
-
-        # 暂停画面
-        if self.paused and not self.game_over:
-            self.renderer.draw_text(
-                "PAUSED",
-                PLAYER1_BOARD_X + 150,
-                BOARD_MARGIN_Y + 250,
-                'large',
-                center=True
-            )
-            self.renderer.draw_text(
-                "Press P to Continue",
-                PLAYER1_BOARD_X + 150,
-                BOARD_MARGIN_Y + 300,
-                center=True
-            )
+        elif self.state == GameState.GAME_OVER:
+            self._render_game()
+            if self.pvp_mode and self.player2:
+                scores = (self.player1.score, self.player2.score)
+                self.ui.draw_game_over(self.winner, scores)
+            else:
+                self.ui.draw_single_game_over(self.player1.score, self.player1.lines)
 
         self.renderer.update()
+
+    def _render_game(self) -> None:
+        """渲染游戏画面"""
+        self.renderer.clear()
+
+        if self.pvp_mode and self.player2:
+            # 对战模式
+            self.renderer.draw_vs_divider()
+            self.renderer.draw_player_board(self.player1, PLAYER1_BOARD_X)
+            self.renderer.draw_player_board(self.player2, PLAYER2_BOARD_X)
+        else:
+            # 单人模式
+            self.renderer.draw_player_board(self.player1, PLAYER1_BOARD_X)
 
     def run(self) -> None:
         """运行游戏主循环"""
@@ -333,7 +303,10 @@ class Game:
 
         while running:
             # 处理输入
-            running = self.handle_input()
+            running = self.handle_events()
+
+            # 处理按键释放
+            self._handle_key_releases()
 
             # 更新游戏状态
             dt = clock.tick(60)  # 60 FPS
@@ -343,6 +316,23 @@ class Game:
             self.render()
 
         self.renderer.quit()
+
+    def _handle_key_releases(self) -> None:
+        """处理按键释放"""
+        if self.state != GameState.PLAYING:
+            return
+
+        keys = pygame.key.get_pressed()
+
+        # 检查玩家控制键是否释放
+        for key in list(self.player1.keys_pressed):
+            if not keys[key]:
+                self.player1.handle_key_release(key)
+
+        if self.pvp_mode and self.player2:
+            for key in list(self.player2.keys_pressed):
+                if not keys[key]:
+                    self.player2.handle_key_release(key)
 
 
 def main():

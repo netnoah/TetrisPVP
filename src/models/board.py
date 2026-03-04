@@ -97,11 +97,14 @@ class Board:
     def get_attack_lines(self) -> int:
         """
         根据消行数计算应该发送给对手的垃圾行数
+        获取后重置消行数，避免重复发送
 
         Returns:
             垃圾行数量
         """
-        return ATTACK_FORMULA.get(self.lines_cleared, 0)
+        attack = ATTACK_FORMULA.get(self.lines_cleared, 0)
+        self.lines_cleared = 0  # 重置，避免重复发送
+        return attack
 
     def add_garbage_rows(self, count: int) -> bool:
         """

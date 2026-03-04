@@ -1,17 +1,21 @@
 """
 游戏渲染器
 使用 Pygame 绘制游戏画面
+支持单人和双人对战模式
 """
 
 import pygame
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from src.config import (
     WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, FPS,
     BOARD_WIDTH, BOARD_HEIGHT, CELL_SIZE,
-    PLAYER1_BOARD_X, PLAYER2_BOARD_X, BOARD_MARGIN_Y,
+    PLAYER1_BOARD_X, PLAYER2_BOARD_X, BOARD_MARGIN_Y, BOARD_GAP,
     COLORS, FONT_SIZE_LARGE, FONT_SIZE_MEDIUM
 )
+
+if TYPE_CHECKING:
+    from src.models.player import Player
 
 
 class Renderer:
@@ -166,7 +170,7 @@ class Renderer:
             self.screen.blit(text_surface, (x, y))
 
     def draw_player_info(self, player_num: int, board_x: int,
-                         score: int, lines: int) -> None:
+                         score: int, lines: int, garbage_item: int = 0) -> None:
         """
         绘制玩家信息
 
@@ -175,6 +179,7 @@ class Renderer:
             board_x: 棋盘 X 坐标
             score: 分数
             lines: 消行数
+            garbage_item: 道具数量（垃圾行）
         """
         # 玩家标签
         self.draw_text(f"Player {player_num}", board_x, 20, 'large')
@@ -183,6 +188,14 @@ class Renderer:
         info_y = BOARD_MARGIN_Y + BOARD_HEIGHT * CELL_SIZE + 20
         self.draw_text(f"Score: {score}", board_x, info_y)
         self.draw_text(f"Lines: {lines}", board_x, info_y + 25)
+
+        # 道具显示
+        if garbage_item > 0:
+            # 高亮显示道具
+            item_color = (255, 200, 0)  # 金色
+            item_text = f"ITEM: {garbage_item} lines"
+            item_surface = self.font_medium.render(item_text, True, item_color)
+            self.screen.blit(item_surface, (board_x, info_y + 50))
 
     def update(self) -> None:
         """更新显示"""
@@ -207,3 +220,120 @@ class Renderer:
     def quit(self) -> None:
         """退出渲染器"""
         pygame.quit()
+
+    def draw_player_board(self, player: 'Player', board_x: int) -> None:
+        """
+        绘制单个玩家的完整棋盘视图
+
+        Args:
+            player: 玩家实例
+            board_x: 棋盘左上角 X 坐标
+        """
+        # 绘制棋盘背景和网格
+        self.draw_board(board_x, BOARD_MARGIN_Y, player.board.grid)
+        self.draw_border(board_x, BOARD_MARGIN_Y)
+
+        # 绘制当前方块
+        if player.current_piece and not player.game_over:
+            # 绘制幽灵方块
+            ghost_row = player.board.get_ghost_position(player.current_piece)
+            ghost = player.current_piece.copy()
+            ghost.row = ghost_row
+            self.draw_tetromino(board_x, BOARD_MARGIN_Y, ghost, is_ghost=True)
+            # 绘制当前方块
+            self.draw_tetromino(board_x, BOARD_MARGIN_Y, player.current_piece)
+
+        # 绘制玩家信息
+        self.draw_player_info(player.player_id, board_x, player.score, player.lines, player.garbage_item)
+
+        # 绘制等级
+        self.draw_text(
+            f"Level: {player.level}",
+            board_x,
+            BOARD_MARGIN_Y + BOARD_HEIGHT * CELL_SIZE + 95
+        )
+
+        # 绘制下一个方块预览
+        if player.next_piece:
+            self.draw_text("Next:", board_x + 200, BOARD_MARGIN_Y)
+            preview_x = board_x + 200
+            preview_y = BOARD_MARGIN_Y + 30
+            for row, col in player.next_piece.cells:
+                x = preview_x + col * 20
+                y = preview_y + row * 20
+                rect = pygame.Rect(x, y, 18, 18)
+                pygame.draw.rect(self.screen, player.next_piece.color, rect)
+
+    def draw_game_over(self, winner_id: Optional[int] = None) -> None:
+        """
+        绘制游戏结束画面
+
+        Args:
+            winner_id: 获胜玩家编号，None 表示平局
+        """
+        center_x = WINDOW_WIDTH // 2
+        center_y = WINDOW_HEIGHT // 2
+
+        # 半透明背景
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        overlay.set_alpha(180)
+        overlay.fill(COLORS['background'])
+        self.screen.blit(overlay, (0, 0))
+
+        if winner_id is not None:
+            self.draw_text(
+                f"PLAYER {winner_id} WINS!",
+                center_x,
+                center_y - 30,
+                'large',
+                center=True
+            )
+        else:
+            self.draw_text(
+                "GAME OVER",
+                center_x,
+                center_y - 30,
+                'large',
+                center=True
+            )
+
+        self.draw_text(
+            "Press R to Restart",
+            center_x,
+            center_y + 30,
+            center=True
+        )
+        self.draw_text(
+            "Press ESC to Quit",
+            center_x,
+            center_y + 60,
+            center=True
+        )
+
+    def draw_pause_screen(self) -> None:
+        """绘制暂停画面"""
+        center_x = WINDOW_WIDTH // 2
+        center_y = WINDOW_HEIGHT // 2
+
+        # 半透明背景
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT))
+        overlay.set_alpha(180)
+        overlay.fill(COLORS['background'])
+        self.screen.blit(overlay, (0, 0))
+
+        self.draw_text("PAUSED", center_x, center_y - 20, 'large', center=True)
+        self.draw_text("Press P to Continue", center_x, center_y + 30, center=True)
+
+    def draw_vs_divider(self) -> None:
+        """绘制对战分隔符"""
+        divider_x = PLAYER1_BOARD_X + BOARD_WIDTH * CELL_SIZE + BOARD_GAP // 2
+        pygame.draw.line(
+            self.screen,
+            COLORS['border'],
+            (divider_x, BOARD_MARGIN_Y),
+            (divider_x, BOARD_MARGIN_Y + BOARD_HEIGHT * CELL_SIZE),
+            2
+        )
+        # VS 文字
+        vs_y = BOARD_MARGIN_Y + BOARD_HEIGHT * CELL_SIZE // 2
+        self.draw_text("VS", divider_x, vs_y, 'large', center=True)

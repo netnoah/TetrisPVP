@@ -160,3 +160,46 @@ class TetrominoBag:
             result.append(temp_bag.pop())
 
         return result
+
+
+class SharedPieceSequence:
+    """
+    共享方块序列 - PVP模式使用
+    预生成方块序列，两个玩家使用相同序列
+    """
+
+    def __init__(self, initial_size: int = 100):
+        """
+        初始化共享序列
+
+        Args:
+            initial_size: 初始预生成的方块数量
+        """
+        self.sequence: List[str] = []
+        self._generate_sequence(initial_size)
+
+    def _generate_sequence(self, count: int) -> None:
+        """
+        生成方块序列（使用7-bag系统）
+
+        Args:
+            count: 要生成的数量
+        """
+        bag = TetrominoBag()
+        for _ in range(count):
+            self.sequence.append(bag.next())
+
+    def get(self, index: int) -> str:
+        """
+        获取指定索引的方块类型
+
+        Args:
+            index: 方块索引
+
+        Returns:
+            方块类型
+        """
+        # 如果索引超出范围，自动扩展序列
+        while index >= len(self.sequence):
+            self._generate_sequence(50)
+        return self.sequence[index]
